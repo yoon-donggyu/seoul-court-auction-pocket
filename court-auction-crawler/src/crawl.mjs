@@ -46,7 +46,8 @@ function parseRow(court, cells) {
   if (!caseNumber) return null;
 
   const dates = joined.match(/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}/g) || [];
-  const moneyMatches = [...joined.matchAll(/(?:금\s*)?([0-9][0-9,]{3,})\s*원?/g)]
+  // 사건번호·주소 숫자를 가격으로 오인하지 않도록 천 단위 쉼표가 있는 금액만 읽는다.
+  const moneyMatches = [...joined.matchAll(/\b(\d{1,3}(?:,\d{3})+)\s*원?/g)]
     .map(match => parseMoney(match[1])).filter(Boolean);
   const failCount = joined.match(/유찰\s*[:：()\-]?\s*(\d+)\s*회?/);
   const itemNo = joined.match(/물건번호\s*(\d+)/);
@@ -85,11 +86,11 @@ function parseRow(court, cells) {
 }
 
 async function extractVisibleItems(page, court) {
-  const physicalRows = await page.locator('table').evaluateAll(elements => elements.flatMap(table =>
-    Array.from(table.querySelectorAll('tr')).map(row =>
-      Array.from(row.querySelectorAll('td')).map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
-    ).filter(cells => cells.length)
-  ));
+  const physicalRows = await page.locator('tr').evaluateAll(rows => rows.map(row =>
+    Array.from(row.children)
+      .filter(cell => cell.tagName === 'TD')
+      .map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
+  ).filter(cells => cells.length));
   const logicalRows = [];
   let current = null;
   for (const cells of physicalRows) {
@@ -218,7 +219,15 @@ async function main() {
     await fs.rm(DIAGNOSTIC, { force: true });
     console.log(JSON.stringify({ ok: true, activeCount: payload.activeCount, courtStats }, null, 2));
   } catch (error) {
-    await fs.writeFile(DIAGNOSTIC, await page.content(), 'utf8').catch(() => {});
+    // 이동 중인 페이지에서는 page.content() 자체가 실패할 수 있다.
+    // 진단 파일 저장 실패가 실제 수집 오류를 가리지 않도록 별도로 보호한다.
+    try {
+      await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+      const html = await page.content();
+      await fs.writeFile(DIAGNOSTIC, html, 'utf8');
+    } catch (diagnosticError) {
+      console.warn(`진단 화면 저장 실패: ${diagnosticError?.message || diagnosticError}`);
+    }
     console.error(error?.stack || String(error));
     process.exitCode = 1;
   } finally {
