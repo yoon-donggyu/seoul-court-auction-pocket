@@ -1,0 +1,42 @@
+name: Deploy Court Auction Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "court-auction-crawler/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: court-auction-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 저장소 파일 불러오기
+        uses: actions/checkout@v4
+
+      - name: GitHub Pages 설정
+        uses: actions/configure-pages@v5
+
+      - name: 웹페이지 파일 준비
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: court-auction-crawler
+
+      - name: 웹페이지 공개
+        id: deployment
+        uses: actions/deploy-pages@v4
