@@ -148,28 +148,62 @@ async function goToNextResultPage(page, currentPage) {
   return false;
 }
 
+async function findCourtSelect(page, timeout = 90000) {
+  const startedAt = Date.now();
+  let lastDiagnostics = '';
+
+  while (Date.now() - startedAt < timeout) {
+    const byTitle = page.locator('select[title*="법원"]');
+    if (await byTitle.count()) {
+      for (let i = 0; i < await byTitle.count(); i += 1) {
+        const candidate = byTitle.nth(i);
+        if (await candidate.isVisible().catch(() => false)) return candidate;
+      }
+    }
+
+    const selects = page.locator('select');
+    const count = await selects.count().catch(() => 0);
+    const diagnostics = [];
+    for (let i = 0; i < count; i += 1) {
+      const candidate = selects.nth(i);
+      const optionTexts = await candidate.locator('option').allTextContents().catch(() => []);
+      const title = await candidate.getAttribute('title').catch(() => '');
+      const id = await candidate.getAttribute('id').catch(() => '');
+      diagnostics.push(`#${i} title=${title || ''} id=${id || ''} options=${optionTexts.slice(0, 8).join(' / ')}`);
+      if (optionTexts.some(text => clean(text).includes('서울중앙지방법원'))) {
+        if (await candidate.isVisible().catch(() => false)) return candidate;
+      }
+    }
+    lastDiagnostics = diagnostics.join(' | ');
+    await page.waitForTimeout(1500);
+  }
+
+  throw new Error(`법원 선택 항목을 찾지 못했습니다. url=${page.url()} selects=${lastDiagnostics || '없음'}`);
+}
+
 async function openSourcePage(page) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       if (page.isClosed()) throw new Error('브라우저 페이지가 닫혔습니다.');
-      // WebSquare가 내부 이동을 반복해 goto가 시간 초과되어도 실제 검색 화면은
-      // 이미 열린 경우가 있다. goto 오류보다 검색 입력 화면 표시 여부를 우선한다.
+
       let navigationError;
-      await page.goto(SOURCE_URL, { waitUntil: 'commit', timeout: 45000 })
+      await page.goto(SOURCE_URL, { waitUntil: 'domcontentloaded', timeout: 120000 })
         .catch(error => { navigationError = error; });
-      // 진행 중인 내부 이동을 멈춰야 이후 locator가 navigation 완료를 기다리며
-      // 다시 시간 초과되는 현상을 피할 수 있다. WebSquare 초기화 시간은 먼저 준다.
-      await page.waitForTimeout(navigationError ? 1000 : 8000);
-      await page.evaluate(() => window.stop()).catch(() => {});
-      await page.getByLabel('법원 선택').waitFor({ state: 'visible', timeout: 30000 });
-      if (navigationError) console.warn('페이지 이동 완료 응답은 지연됐지만 검색 화면을 확인해 계속 진행합니다.');
+
+      // 법원 사이트는 WebSquare 초기화가 끝난 뒤 검색 폼이 생성된다.
+      // window.stop()으로 초기화를 중단하지 않고 실제 법원 select가 나타날 때까지 기다린다.
+      await page.waitForTimeout(5000);
+      await findCourtSelect(page, 90000);
+
+      if (navigationError) {
+        console.warn(`페이지 이동 완료 응답은 지연됐지만 검색 화면을 확인해 계속 진행합니다: ${navigationError?.message || navigationError}`);
+      }
       return;
     } catch (error) {
       lastError = error;
       console.warn(`법원 사이트 접속 ${attempt}/3 실패: ${error?.message || error}`);
       await page.waitForTimeout(10000 * attempt);
-      await page.evaluate(() => window.stop()).catch(() => {});
     }
   }
   throw new Error(`법원 사이트 접속에 3회 실패했습니다: ${lastError?.message || lastError}`);
@@ -177,9 +211,15 @@ async function openSourcePage(page) {
 
 async function crawlCourt(page, court) {
   await openSourcePage(page);
-  await page.getByLabel('법원 선택').selectOption({ label: court });
+  const courtSelect = await findCourtSelect(page, 30000);
+  await courtSelect.selectOption({ label: court });
   await randomDelay();
-  await page.locator('input[title="부동산 물건상세 검색 버튼"]').click({ timeout: 30000 });
+
+  const searchButton = page.locator('input[title="부동산 물건상세 검색 버튼"]');
+  if (!await searchButton.count()) {
+    throw new Error(`검색 버튼을 찾지 못했습니다. url=${page.url()}`);
+  }
+  await searchButton.click({ timeout: 30000 });
   await page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
   await randomDelay();
 
@@ -277,8 +317,6 @@ async function main() {
     await fs.rm(DIAGNOSTIC, { force: true });
     console.log(JSON.stringify({ ok: true, activeCount: payload.activeCount, courtStats }, null, 2));
   } catch (error) {
-    // 이동 중인 페이지에서는 page.content() 자체가 실패할 수 있다.
-    // 진단 파일 저장 실패가 실제 수집 오류를 가리지 않도록 별도로 보호한다.
     try {
       await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
       const html = await page.content();
