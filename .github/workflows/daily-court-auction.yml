@@ -5,6 +5,12 @@ on:
     # 매일 한국시간 새벽 1시
     - cron: "0 16 * * *"
   workflow_dispatch:
+  push:
+    paths:
+      - "court-auction-crawler/src/**"
+      - "court-auction-crawler/package.json"
+      - "court-auction-crawler/package-lock.json"
+      - ".github/workflows/daily-court-auction.yml"
 
 permissions:
   contents: write
