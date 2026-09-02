@@ -10,7 +10,6 @@ on:
       - "court-auction-crawler/src/**"
       - "court-auction-crawler/package.json"
       - "court-auction-crawler/package-lock.json"
-      - ".github/workflows/daily-court-auction.yml"
 
 permissions:
   contents: write
@@ -48,6 +47,9 @@ jobs:
 
       - name: 서울 법원경매 수집
         run: npm run crawl
+
+      - name: 최저매각가격 검증 및 보정
+        run: node src/normalize-prices.mjs
 
       - name: 수집 결과 저장
         working-directory: .
