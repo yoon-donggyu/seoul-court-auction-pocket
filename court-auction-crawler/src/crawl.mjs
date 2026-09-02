@@ -158,7 +158,11 @@ async function openSourcePage(page) {
       let navigationError;
       await page.goto(SOURCE_URL, { waitUntil: 'commit', timeout: 45000 })
         .catch(error => { navigationError = error; });
-      await page.getByLabel('법원 선택').waitFor({ state: 'visible', timeout: 60000 });
+      // 진행 중인 내부 이동을 멈춰야 이후 locator가 navigation 완료를 기다리며
+      // 다시 시간 초과되는 현상을 피할 수 있다. WebSquare 초기화 시간은 먼저 준다.
+      await page.waitForTimeout(navigationError ? 1000 : 8000);
+      await page.evaluate(() => window.stop()).catch(() => {});
+      await page.getByLabel('법원 선택').waitFor({ state: 'visible', timeout: 30000 });
       if (navigationError) console.warn('페이지 이동 완료 응답은 지연됐지만 검색 화면을 확인해 계속 진행합니다.');
       return;
     } catch (error) {
