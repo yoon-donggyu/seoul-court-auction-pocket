@@ -39,95 +39,147 @@ function parseMoney(value) {
   return n && Number(n) >= 10000 ? n : '';
 }
 
-function parseRow(court, cells) {
-  const text = cells.map(clean);
-  const joined = text.join(' | ');
-  const caseNumber = joined.match(/\b(\d{4})\s*타경\s*(\d+)\b/);
-  if (!caseNumber) return null;
+function columnNumber(cell) {
+  return Number(cell.className.match(/columnstyle_(\d+)_/)?.[1] ?? -1);
+}
 
-  const dates = joined.match(/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}/g) || [];
-  // 사건번호·주소 숫자를 가격으로 오인하지 않도록 천 단위 쉼표가 있는 금액만 읽는다.
-  const moneyMatches = [...joined.matchAll(/\b(\d{1,3}(?:,\d{3})+)\s*원?/g)]
-    .map(match => parseMoney(match[1])).filter(Boolean);
-  const failCount = joined.match(/유찰\s*[:：()\-]?\s*(\d+)\s*회?/);
-  const itemNo = joined.match(/물건번호\s*(\d+)/);
-  const itemNumber = itemNo?.[1] || (text[2]?.match(/^\d{1,4}$/)?.[0]) || '1';
-  const address = text.find(v => /(서울특별시|서울시)\s/.test(v)) || '';
-  const useType = text.find(v => /(아파트|다세대|연립|단독주택|다가구|오피스텔|상가|근린|토지|대지|임야|전|답)/.test(v)) || '';
-  const appraisalPrice = moneyMatches[0] || '';
-  const minimumPrice = moneyMatches[1] || '';
-  const discountRate = joined.match(/\((\d+(?:\.\d+)?)%\)/)?.[1] || '';
-  const saleStatus = text.find(v => /유찰|매각|변경|취하|정지|진행/.test(v) && !/경매\d+계/.test(v)) || '';
-  const remarks = text.filter(v => v && v !== '지도' && /건축물대장|임대|대항력|지분|특별매각|재매각/.test(v)).join(' · ');
+function columnValues(rows, number) {
+  return rows.flatMap(row => row.cells)
+    .filter(cell => columnNumber(cell) === number)
+    .map(cell => clean(cell.text))
+    .filter(Boolean);
+}
+
+function parseRows(court, rows) {
+  const caseText = columnValues(rows, 1)[0] || '';
+  const caseNumbers = [...caseText.matchAll(/(\d{4})\s*타경\s*(\d+)/g)]
+    .map(match => `${match[1]}타경${match[2]}`)
+    .filter((value, index, values) => values.indexOf(value) === index);
+  if (!caseNumbers.length) return null;
+
+  const isDuplicate = /중복/.test(caseText);
+  const caseNumber = caseNumbers.join(' / ') + (isDuplicate ? ' (중복)' : '');
+  const itemNumber = columnValues(rows, 2)[0]?.match(/^\d{1,4}$/)?.[0] || '1';
+  const addressParts = columnValues(rows, 3);
+  const address = addressParts.join(' · ');
+  const remarks = columnValues(rows, 5).join(' · ');
+  const appraisalPrice = parseMoney(columnValues(rows, 6)[0] || '');
+  const scheduleText = columnValues(rows, 7)[0] || '';
+  const saleDate = scheduleText.match(/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}/)?.[0] || '';
+  const department = clean(scheduleText.replace(saleDate, ''));
+  const useType = columnValues(rows, 8).join(' · ');
+  const minimumText = columnValues(rows, 9)[0] || '';
+  const minimumPrice = parseMoney(minimumText);
+  const discountRate = minimumText.match(/\((\d+(?:\.\d+)?)%\)/)?.[1] || '';
+  const saleStatus = columnValues(rows, 10)[0] || '';
+  const failed = saleStatus.match(/유찰\s*[:：()\-]?\s*(\d+)\s*회?/);
+  const failCount = failed ? Number(failed[1]) : (/신건/.test(saleStatus) ? 0 : null);
+  const raw = rows.flatMap(row => row.cells.map(cell => clean(cell.text))).filter(Boolean);
   const fields = [
-    ['법원', court], ['사건번호', `${caseNumber[1]}타경${caseNumber[2]}`],
+    ['법원', court], ['사건번호', caseNumber],
     ['물건번호', itemNumber], ['용도', useType],
-    ['소재지 · 면적', address], ['감정평가액', appraisalPrice],
+    ['소재지 · 물건내역', address], ['비고', remarks], ['감정평가액', appraisalPrice],
     ['최저매각가격', minimumPrice], ['감정가 대비', discountRate ? `${discountRate}%` : ''],
-    ['담당계 · 매각기일', dates[0] || ''], ['진행상태', saleStatus],
-    ['유찰 횟수', failCount ? `${failCount[1]}회` : ''], ['비고 · 부가정보', remarks]
+    ['담당계', department], ['매각기일', saleDate], ['진행상태', saleStatus],
+    ['유찰 횟수', failCount == null ? '' : `${failCount}회`]
   ].filter(([, value]) => value).map(([label, value]) => ({ label, value }));
 
   return {
-    id: `${court}-${caseNumber[1]}타경${caseNumber[2]}-${itemNumber}`,
+    id: `${court}-${caseNumbers.join('-')}-${itemNumber}`,
     court,
-    caseNumber: `${caseNumber[1]}타경${caseNumber[2]}`,
+    caseNumber,
+    caseNumbers,
     itemNumber,
     address,
     useType,
     appraisalPrice,
     minimumPrice,
-    saleDate: dates[0] || '',
-    failCount: failCount ? Number(failCount[1]) : null,
+    discountRate,
+    department,
+    saleStatus,
+    saleDate,
+    failCount,
+    remarks,
     fields,
-    raw: text,
+    raw,
     sourceUrl: SOURCE_URL
   };
 }
 
 async function extractVisibleItems(page, court) {
-  const physicalRows = await page.locator('tr').evaluateAll(rows => rows.map(row =>
-    Array.from(row.children)
+  const physicalRows = await page.locator('tr').evaluateAll(rows => rows.map(row => ({
+    cells: Array.from(row.children)
       .filter(cell => cell.tagName === 'TD')
-      .map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
-  ).filter(cells => cells.length));
+      .map(cell => ({
+        className: cell.className || '',
+        text: (cell.innerText || '').replace(/\s+/g, ' ').trim()
+      }))
+  })).filter(row => row.cells.length));
   const logicalRows = [];
   let current = null;
-  for (const cells of physicalRows) {
-    const hasCase = cells.some(value => /\d{4}\s*타경\s*\d+/.test(value));
+  for (const row of physicalRows) {
+    const caseCell = row.cells.find(cell => columnNumber(cell) === 1);
+    const hasCase = /\d{4}\s*타경\s*\d+/.test(caseCell?.text || '');
     if (hasCase) {
       if (current) logicalRows.push(current);
-      current = [...cells];
-    } else if (current && cells.some(Boolean)) {
-      current.push(...cells);
+      current = [row];
+    } else if (current && row.cells.some(cell => cell.text)) {
+      current.push(row);
     }
   }
   if (current) logicalRows.push(current);
-  return logicalRows.map(cells => parseRow(court, cells)).filter(Boolean);
+  return logicalRows.map(rows => parseRows(court, rows)).filter(Boolean);
 }
 
-async function findNextButton(page) {
-  const candidates = [
-    page.getByRole('link', { name: /다음/ }),
-    page.getByRole('button', { name: /다음/ }),
-    page.locator('[title*="다음"]')
-  ];
-  for (const candidate of candidates) {
-    if (await candidate.count()) {
-      const first = candidate.first();
-      if (await first.isVisible() && await first.isEnabled()) return first;
+async function goToNextResultPage(page, currentPage) {
+  const nextNumber = page.getByRole('button', { name: String(currentPage + 1), exact: true });
+  if (await nextNumber.count() && await nextNumber.first().isVisible() && await nextNumber.first().isEnabled()) {
+    await nextNumber.first().click({ timeout: 30000 });
+    await randomDelay();
+    return true;
+  }
+
+  const nextGroup = page.getByRole('button', { name: '다음 목록', exact: true });
+  if (await nextGroup.count() && await nextGroup.first().isVisible() && await nextGroup.first().isEnabled()) {
+    await nextGroup.first().click({ timeout: 30000 });
+    await randomDelay();
+    return true;
+  }
+  return false;
+}
+
+async function openSourcePage(page) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      if (page.isClosed()) throw new Error('브라우저 페이지가 닫혔습니다.');
+      await page.goto(SOURCE_URL, { waitUntil: 'commit', timeout: 120000 });
+      await page.getByLabel('법원 선택').waitFor({ state: 'visible', timeout: 60000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(`법원 사이트 접속 ${attempt}/3 실패: ${error?.message || error}`);
+      await page.waitForTimeout(10000 * attempt);
+      await page.evaluate(() => window.stop()).catch(() => {});
     }
   }
-  return null;
+  throw new Error(`법원 사이트 접속에 3회 실패했습니다: ${lastError?.message || lastError}`);
 }
 
 async function crawlCourt(page, court) {
-  await page.goto(SOURCE_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await openSourcePage(page);
   await page.getByLabel('법원 선택').selectOption({ label: court });
   await randomDelay();
   await page.locator('input[title="부동산 물건상세 검색 버튼"]').click({ timeout: 30000 });
   await page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
   await randomDelay();
+
+  // 페이지당 40건으로 늘리고 1, 2, 3… 순서대로 이동해 중간 페이지가 빠지지 않게 한다.
+  const pageSize = page.locator('select[title="페이지당 수 선택"]');
+  if (await pageSize.count()) {
+    await pageSize.selectOption({ label: '40' });
+    await randomDelay();
+  }
 
   const items = [];
   const seenPageSignatures = new Set();
@@ -138,10 +190,7 @@ async function crawlCourt(page, court) {
     seenPageSignatures.add(signature);
     items.push(...current);
 
-    const next = await findNextButton(page);
-    if (!next) break;
-    await next.click({ timeout: 30000 });
-    await randomDelay();
+    if (!await goToNextResultPage(page, pageNo)) break;
   }
   return items;
 }
