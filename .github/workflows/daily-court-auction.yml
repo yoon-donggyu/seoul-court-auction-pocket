@@ -1,0 +1,48 @@
+name: Daily Seoul Court Auction Crawl
+
+on:
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: court-auction-daily
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: 저장소 파일 불러오기
+        uses: actions/checkout@v4
+
+      - name: Node.js 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: 프로그램 설치
+        run: npm ci
+
+      - name: 수집용 브라우저 설치
+        run: npx playwright install --with-deps chromium
+
+      - name: 서울 법원경매 수집
+        run: npm run crawl
+
+      - name: 수집 결과 저장
+        run: |
+          git config user.name "court-auction-bot"
+          git config user.email "court-auction-bot@users.noreply.github.com"
+          git add data/court-auctions.json
+          if [ -f data/court-auctions.previous.json ]; then
+            git add data/court-auctions.previous.json
+          fi
+          git diff --cached --quiet || git commit -m "data: update Seoul court auctions"
+          git push
