@@ -39,40 +39,43 @@ function parseMoney(value) {
   return n && Number(n) >= 10000 ? n : '';
 }
 
-function fieldValue(fields, patterns) {
-  const hit = fields.find(field => patterns.some(pattern => pattern.test(field.label)));
-  return hit?.value || '';
-}
-
-function parseRow(court, cells, headers = []) {
+function parseRow(court, cells) {
   const text = cells.map(clean);
   const joined = text.join(' | ');
   const caseNumber = joined.match(/\b(\d{4})\s*타경\s*(\d+)\b/);
   if (!caseNumber) return null;
 
   const dates = joined.match(/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}/g) || [];
-  const fields = text.map((value, index) => ({
-    label: clean(headers[index]) || `항목 ${index + 1}`,
-    value
-  })).filter(field => field.value);
-  const appraisalText = fieldValue(fields, [/감정/, /평가/]);
-  const minimumText = fieldValue(fields, [/최저/, /매각가격/, /입찰가격/]);
   const moneyMatches = [...joined.matchAll(/(?:금\s*)?([0-9][0-9,]{3,})\s*원?/g)]
     .map(match => parseMoney(match[1])).filter(Boolean);
   const failCount = joined.match(/유찰\s*[:：()\-]?\s*(\d+)\s*회?/);
   const itemNo = joined.match(/물건번호\s*(\d+)/);
+  const itemNumber = itemNo?.[1] || (text[2]?.match(/^\d{1,4}$/)?.[0]) || '1';
   const address = text.find(v => /(서울특별시|서울시)\s/.test(v)) || '';
   const useType = text.find(v => /(아파트|다세대|연립|단독주택|다가구|오피스텔|상가|근린|토지|대지|임야|전|답)/.test(v)) || '';
+  const appraisalPrice = moneyMatches[0] || '';
+  const minimumPrice = moneyMatches[1] || '';
+  const discountRate = joined.match(/\((\d+(?:\.\d+)?)%\)/)?.[1] || '';
+  const saleStatus = text.find(v => /유찰|매각|변경|취하|정지|진행/.test(v) && !/경매\d+계/.test(v)) || '';
+  const remarks = text.filter(v => v && v !== '지도' && /건축물대장|임대|대항력|지분|특별매각|재매각/.test(v)).join(' · ');
+  const fields = [
+    ['법원', court], ['사건번호', `${caseNumber[1]}타경${caseNumber[2]}`],
+    ['물건번호', itemNumber], ['용도', useType],
+    ['소재지 · 면적', address], ['감정평가액', appraisalPrice],
+    ['최저매각가격', minimumPrice], ['감정가 대비', discountRate ? `${discountRate}%` : ''],
+    ['담당계 · 매각기일', dates[0] || ''], ['진행상태', saleStatus],
+    ['유찰 횟수', failCount ? `${failCount[1]}회` : ''], ['비고 · 부가정보', remarks]
+  ].filter(([, value]) => value).map(([label, value]) => ({ label, value }));
 
   return {
-    id: `${court}-${caseNumber[1]}타경${caseNumber[2]}-${itemNo?.[1] || '1'}`,
+    id: `${court}-${caseNumber[1]}타경${caseNumber[2]}-${itemNumber}`,
     court,
     caseNumber: `${caseNumber[1]}타경${caseNumber[2]}`,
-    itemNumber: itemNo?.[1] || '1',
+    itemNumber,
     address,
     useType,
-    appraisalPrice: parseMoney(appraisalText) || '',
-    minimumPrice: parseMoney(minimumText) || moneyMatches.at(-1) || '',
+    appraisalPrice,
+    minimumPrice,
     saleDate: dates[0] || '',
     failCount: failCount ? Number(failCount[1]) : null,
     fields,
@@ -82,17 +85,24 @@ function parseRow(court, cells, headers = []) {
 }
 
 async function extractVisibleItems(page, court) {
-  const tables = await page.locator('table').evaluateAll(elements => elements.flatMap(table => {
-    const headerRows = Array.from(table.querySelectorAll('tr')).filter(row => row.querySelector('th'));
-    const headers = headerRows.length
-      ? Array.from(headerRows.at(-1).querySelectorAll('th,td')).map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
-      : [];
-    return Array.from(table.querySelectorAll('tr')).map(row => ({
-      headers,
-      cells: Array.from(row.querySelectorAll('td')).map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
-    }));
-  }));
-  return tables.map(row => parseRow(court, row.cells, row.headers)).filter(Boolean);
+  const physicalRows = await page.locator('table').evaluateAll(elements => elements.flatMap(table =>
+    Array.from(table.querySelectorAll('tr')).map(row =>
+      Array.from(row.querySelectorAll('td')).map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
+    ).filter(cells => cells.length)
+  ));
+  const logicalRows = [];
+  let current = null;
+  for (const cells of physicalRows) {
+    const hasCase = cells.some(value => /\d{4}\s*타경\s*\d+/.test(value));
+    if (hasCase) {
+      if (current) logicalRows.push(current);
+      current = [...cells];
+    } else if (current && cells.some(Boolean)) {
+      current.push(...cells);
+    }
+  }
+  if (current) logicalRows.push(current);
+  return logicalRows.map(cells => parseRow(court, cells)).filter(Boolean);
 }
 
 async function findNextButton(page) {
