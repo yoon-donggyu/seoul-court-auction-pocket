@@ -153,8 +153,13 @@ async function openSourcePage(page) {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       if (page.isClosed()) throw new Error('브라우저 페이지가 닫혔습니다.');
-      await page.goto(SOURCE_URL, { waitUntil: 'commit', timeout: 120000 });
+      // WebSquare가 내부 이동을 반복해 goto가 시간 초과되어도 실제 검색 화면은
+      // 이미 열린 경우가 있다. goto 오류보다 검색 입력 화면 표시 여부를 우선한다.
+      let navigationError;
+      await page.goto(SOURCE_URL, { waitUntil: 'commit', timeout: 45000 })
+        .catch(error => { navigationError = error; });
       await page.getByLabel('법원 선택').waitFor({ state: 'visible', timeout: 60000 });
+      if (navigationError) console.warn('페이지 이동 완료 응답은 지연됐지만 검색 화면을 확인해 계속 진행합니다.');
       return;
     } catch (error) {
       lastError = error;
