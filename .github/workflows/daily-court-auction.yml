@@ -2,11 +2,14 @@ name: Daily Seoul Court Auction Crawl
 
 on:
   schedule:
+    # 매일 한국시간 새벽 1시
     - cron: "0 16 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: court-auction-daily
@@ -16,7 +19,6 @@ jobs:
   crawl:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-
     defaults:
       run:
         working-directory: court-auction-crawler
@@ -29,9 +31,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: court-auction-crawler/package-lock.json
 
       - name: 프로그램 설치
-        run: npm install
+        run: npm ci
 
       - name: 수집용 브라우저 설치
         run: npx playwright install --with-deps chromium
@@ -44,9 +48,31 @@ jobs:
         run: |
           git config user.name "court-auction-bot"
           git config user.email "court-auction-bot@users.noreply.github.com"
-          git add court-auction-crawler/data/court-auctions.json
-          if [ -f court-auction-crawler/data/court-auctions.previous.json ]; then
-            git add court-auction-crawler/data/court-auctions.previous.json
-          fi
+          git add court-auction-crawler/data/
           git diff --cached --quiet || git commit -m "data: update Seoul court auctions"
           git push
+
+  deploy:
+    needs: crawl
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 최신 수집 결과 불러오기
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Pages 설정
+        uses: actions/configure-pages@v5
+
+      - name: 웹페이지 파일 준비
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: court-auction-crawler
+
+      - name: 웹페이지 배포
+        id: deployment
+        uses: actions/deploy-pages@v4
