@@ -13,11 +13,12 @@
     main{max-width:780px;margin:auto;padding:14px 12px 80px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
     .metric,.panel,.item{background:var(--card);border:1px solid var(--line);border-radius:14px}.metric{padding:12px}.metric b{display:block;font-size:19px}.metric span{font-size:10px;color:var(--muted)}
     .panel{padding:10px;margin-bottom:12px}.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}.filters input,.filters select{width:100%;border:1px solid var(--line);border-radius:10px;background:#fff;padding:11px;font-size:13px}
+    .categories{display:flex;gap:7px;overflow-x:auto;padding:2px 1px 11px;margin-bottom:2px;scrollbar-width:none}.categories::-webkit-scrollbar{display:none}.category{flex:0 0 auto;border:1px solid var(--line);background:#fff;color:var(--text);border-radius:999px;padding:9px 13px;font-size:12px;font-weight:700;cursor:pointer}.category.active{background:var(--dark);border-color:var(--dark);color:#fff}
     .list{display:grid;gap:9px}.item{padding:13px}.top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.case{font-weight:750;font-size:14px}.badge{white-space:nowrap;border-radius:999px;background:#eceef1;padding:4px 8px;font-size:10px}
     .badge.new{background:#17191d;color:#fff}.address{font-size:13px;line-height:1.45;margin:8px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;border-top:1px solid var(--line);padding-top:9px}
     .cell span{display:block;color:var(--muted);font-size:10px}.cell b{font-size:12px}.empty{text-align:center;padding:40px 15px;color:var(--muted)}
     .warning{font-size:10px;line-height:1.5;color:var(--muted);padding:12px 4px}.error{background:#fff3f3;color:#a32626;border:1px solid #f0caca;border-radius:12px;padding:12px;font-size:12px}
-    @media(min-width:650px){.filters{grid-template-columns:2fr 1fr 1fr}.list{grid-template-columns:1fr 1fr}}
+    @media(min-width:650px){.filters{grid-template-columns:2fr 1fr 1fr}}
   </style>
 </head>
 <body>
@@ -28,6 +29,7 @@
       <div class="metric"><b id="newCount">-</b><span>신규</span></div>
       <div class="metric"><b id="changed">-</b><span>변경</span></div>
     </section>
+    <nav id="categories" class="categories" aria-label="물건 종류"></nav>
     <section class="panel filters">
       <input id="query" type="search" placeholder="주소·사건번호 검색">
       <select id="court"><option value="">서울 전체 법원</option></select>
@@ -37,13 +39,15 @@
     <p class="warning">법원경매정보 검색 화면이 제공하는 조회일 기준 향후 2주 매각 물건입니다. 실제 입찰 전에는 법원에 비치된 매각물건명세서·현황조사서·감정평가서와 등기사항전부증명서를 반드시 다시 확인하세요.</p>
   </main>
   <script>
-    const state={items:[]};
+    const state={items:[],category:'전체'};
     const money=v=>v?Number(v).toLocaleString('ko-KR')+'원':'미제공';
     const safe=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const categoryOf=x=>{const v=`${x.useType||''} ${x.address||''}`;if(/아파트/.test(v))return'아파트';if(/다세대|연립|빌라|단독주택|다가구|주택/.test(v))return'빌라·주택';if(/오피스텔/.test(v))return'오피스텔';if(/상가|근린|점포|판매시설/.test(v))return'상가';if(/토지|대지|임야|전|답|도로/.test(v))return'토지';return'기타'};
+    function renderCategories(){const names=['전체','아파트','빌라·주택','오피스텔','상가','토지','기타'];document.querySelector('#categories').innerHTML=names.map(name=>{const count=name==='전체'?state.items.length:state.items.filter(x=>categoryOf(x)===name).length;return`<button class="category ${state.category===name?'active':''}" data-category="${safe(name)}">${safe(name)} ${count}</button>`}).join('');document.querySelectorAll('.category').forEach(button=>button.addEventListener('click',()=>{state.category=button.dataset.category;renderCategories();render()}));}
     function render(){
       const q=document.querySelector('#query').value.trim().toLowerCase();
       const court=document.querySelector('#court').value,status=document.querySelector('#status').value;
-      const items=state.items.filter(x=>(!q||`${x.caseNumber} ${x.address} ${x.useType}`.toLowerCase().includes(q))&&(!court||x.court===court)&&(!status||x.status===status));
+      const items=state.items.filter(x=>(state.category==='전체'||categoryOf(x)===state.category)&&(!q||`${x.caseNumber} ${x.address} ${x.useType}`.toLowerCase().includes(q))&&(!court||x.court===court)&&(!status||x.status===status));
       document.querySelector('#list').innerHTML=items.length?items.map((x,i)=>`<article class="item"><div class="top"><div><div class="case">${safe(x.caseNumber)} · 물건 ${safe(x.itemNumber)}</div><small>${safe(x.court)}</small></div><span class="badge ${x.status==='신규'?'new':''}">${safe(x.status)}</span></div><div class="address">${safe(x.address||'주소 미제공')}</div><div class="grid"><div class="cell"><span>감정가</span><b>${money(x.appraisalPrice)}</b></div><div class="cell"><span>최저가</span><b>${money(x.minimumPrice)}</b></div><div class="cell"><span>매각기일</span><b>${safe(x.saleDate||'미제공')}</b></div><div class="cell"><span>유찰</span><b>${x.failCount==null?'상세조회 필요':x.failCount+'회'}</b></div></div><details style="margin-top:10px"><summary style="cursor:pointer;font-weight:700;padding:10px 0">상세보기</summary><div style="display:grid;gap:7px;padding:4px 0 8px">${(x.fields?.length?x.fields:(x.raw||[]).map((v,n)=>({label:'항목 '+(n+1),value:v}))).map(f=>`<div style="border-top:1px solid #eceef1;padding-top:7px"><small style="color:#737984">${safe(f.label)}</small><div>${safe(f.value)}</div></div>`).join('')}<a href="${safe(x.sourceUrl)}" target="_blank" rel="noopener" style="margin-top:5px">법원 원문에서 확인</a></div></details></article>`).join(''):'<div class="empty">조건에 맞는 물건이 없습니다.</div>';
     }
     async function load(){
@@ -52,7 +56,7 @@
         const data=await res.json();if(!data.ok)throw new Error('아직 첫 수집이 완료되지 않았습니다.');state.items=data.items||[];
         document.querySelector('#active').textContent=data.activeCount||0;document.querySelector('#newCount').textContent=state.items.filter(x=>x.status==='신규').length;document.querySelector('#changed').textContent=state.items.filter(x=>x.status==='변경').length;
         document.querySelector('#updated').textContent=`마지막 갱신 ${data.generatedAt||'-'} · ${data.scope||''}`;
-        const courts=[...new Set(state.items.map(x=>x.court))].sort();document.querySelector('#court').innerHTML='<option value="">서울 전체 법원</option>'+courts.map(x=>`<option>${safe(x)}</option>`).join('');render();
+        const courts=[...new Set(state.items.map(x=>x.court))].sort();document.querySelector('#court').innerHTML='<option value="">서울 전체 법원</option>'+courts.map(x=>`<option>${safe(x)}</option>`).join('');renderCategories();render();
       }catch(e){document.querySelector('#error').innerHTML=`<div class="error">${safe(e.message)}</div>`;document.querySelector('#list').innerHTML='<div class="empty">GitHub Actions에서 최초 수집을 실행해주세요.</div>';}
     }
     ['query','court','status'].forEach(id=>document.querySelector('#'+id).addEventListener(id==='query'?'input':'change',render));load();
