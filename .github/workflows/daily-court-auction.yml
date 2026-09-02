@@ -27,7 +27,7 @@ jobs:
           node-version: "24"
 
       - name: 프로그램 설치
-        run: npm ci
+        run: npm install
 
       - name: 수집용 브라우저 설치
         run: npx playwright install --with-deps chromium
