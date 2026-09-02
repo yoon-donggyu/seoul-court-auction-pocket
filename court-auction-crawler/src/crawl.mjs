@@ -34,15 +34,32 @@ function itemKey(item) {
   return [item.court, item.caseNumber, item.itemNumber || '1'].join('|');
 }
 
-function parseRow(court, cells) {
+function parseMoney(value) {
+  const n = digits(value);
+  return n && Number(n) >= 10000 ? n : '';
+}
+
+function fieldValue(fields, patterns) {
+  const hit = fields.find(field => patterns.some(pattern => pattern.test(field.label)));
+  return hit?.value || '';
+}
+
+function parseRow(court, cells, headers = []) {
   const text = cells.map(clean);
   const joined = text.join(' | ');
   const caseNumber = joined.match(/\b(\d{4})\s*타경\s*(\d+)\b/);
   if (!caseNumber) return null;
 
   const dates = joined.match(/20\d{2}[.\-/]\d{1,2}[.\-/]\d{1,2}/g) || [];
-  const money = text.filter(v => /[\d,]+\s*원/.test(v));
-  const failCount = joined.match(/유찰\s*(\d+)\s*회/);
+  const fields = text.map((value, index) => ({
+    label: clean(headers[index]) || `항목 ${index + 1}`,
+    value
+  })).filter(field => field.value);
+  const appraisalText = fieldValue(fields, [/감정/, /평가/]);
+  const minimumText = fieldValue(fields, [/최저/, /매각가격/, /입찰가격/]);
+  const moneyMatches = [...joined.matchAll(/(?:금\s*)?([0-9][0-9,]{3,})\s*원?/g)]
+    .map(match => parseMoney(match[1])).filter(Boolean);
+  const failCount = joined.match(/유찰\s*[:：()\-]?\s*(\d+)\s*회?/);
   const itemNo = joined.match(/물건번호\s*(\d+)/);
   const address = text.find(v => /(서울특별시|서울시)\s/.test(v)) || '';
   const useType = text.find(v => /(아파트|다세대|연립|단독주택|다가구|오피스텔|상가|근린|토지|대지|임야|전|답)/.test(v)) || '';
@@ -54,20 +71,28 @@ function parseRow(court, cells) {
     itemNumber: itemNo?.[1] || '1',
     address,
     useType,
-    appraisalPrice: digits(money[0]),
-    minimumPrice: digits(money[1]),
+    appraisalPrice: parseMoney(appraisalText) || '',
+    minimumPrice: parseMoney(minimumText) || moneyMatches.at(-1) || '',
     saleDate: dates[0] || '',
     failCount: failCount ? Number(failCount[1]) : null,
+    fields,
     raw: text,
     sourceUrl: SOURCE_URL
   };
 }
 
 async function extractVisibleItems(page, court) {
-  const rows = await page.locator('tr').evaluateAll(elements => elements.map(row =>
-    Array.from(row.querySelectorAll('th,td')).map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
-  ));
-  return rows.map(cells => parseRow(court, cells)).filter(Boolean);
+  const tables = await page.locator('table').evaluateAll(elements => elements.flatMap(table => {
+    const headerRows = Array.from(table.querySelectorAll('tr')).filter(row => row.querySelector('th'));
+    const headers = headerRows.length
+      ? Array.from(headerRows.at(-1).querySelectorAll('th,td')).map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
+      : [];
+    return Array.from(table.querySelectorAll('tr')).map(row => ({
+      headers,
+      cells: Array.from(row.querySelectorAll('td')).map(cell => (cell.innerText || '').replace(/\s+/g, ' ').trim())
+    }));
+  }));
+  return tables.map(row => parseRow(court, row.cells, row.headers)).filter(Boolean);
 }
 
 async function findNextButton(page) {
