@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "crawl": "node src/crawl.mjs",
-    "check": "node --check src/crawl.mjs"
+    "crawl": "node src/crawl.mjs && node src/normalize-prices.mjs",
+    "check": "node --check src/crawl.mjs && node --check src/normalize-prices.mjs"
   },
   "dependencies": {
     "playwright": "^1.55.0"
