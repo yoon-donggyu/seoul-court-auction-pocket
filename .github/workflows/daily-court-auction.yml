@@ -25,7 +25,7 @@ jobs:
       - name: 저장소 파일 불러오기
         uses: actions/checkout@v4
 
- - name: Node.js 설치
+      - name: Node.js 설치
         uses: actions/setup-node@v4
         with:
           node-version: "24"
